@@ -3,7 +3,7 @@ require 'rubygems/package_task'
 GEM_SPEC = Gem::Specification.new do |s|
   # basic information
   s.name        = "rake-compiler"
-  s.version     = "0.7.5"
+  s.version     = "0.8.1"
   s.platform    = Gem::Platform::RUBY
 
   # description and details
@@ -18,9 +18,8 @@ GEM_SPEC = Gem::Specification.new do |s|
   s.add_dependency  'rake'
 
   # development dependencies
-  s.add_development_dependency 'rspec', '~> 1.2.9'
-  s.add_development_dependency 'cucumber', '~> 0.4.4'
-  #s.add_development_dependency 'rcov', '~> 0.9.6'
+  s.add_development_dependency 'rspec', '~> 2.8.0'
+  s.add_development_dependency 'cucumber', '~> 1.1.4'
 
   # components, files and paths
   s.files = FileList["features/**/*.{feature,rb}", "bin/rake-compiler",
@@ -34,7 +33,6 @@ GEM_SPEC = Gem::Specification.new do |s|
   s.require_path = 'lib'
 
   # documentation
-  s.has_rdoc = true
   s.rdoc_options << '--main'  << 'README.rdoc' << '--title' << 'rake-compiler -- Documentation'
 
   s.extra_rdoc_files = %w(README.rdoc LICENSE.txt History.txt)

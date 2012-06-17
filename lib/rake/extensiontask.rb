@@ -1,6 +1,7 @@
 #!/usr/bin/env ruby
 
 require 'rake/baseextensiontask'
+require "rubygems/package_task"
 
 # Define a series of tasks to aid in the compilation of C extensions for
 # gem developer/creators.
@@ -13,15 +14,18 @@ module Rake
     attr_accessor :cross_platform
     attr_accessor :cross_config_options
     attr_accessor :no_native
+    attr_accessor :config_includes
 
     def init(name = nil, gem_spec = nil)
       super
       @config_script = 'extconf.rb'
       @source_pattern = "*.c"
+      @compiled_pattern = "*.{o,obj,so,bundle,dSYM}"
       @cross_compile = false
       @cross_config_options = []
       @cross_compiling = nil
       @no_native = false
+      @config_includes = []
     end
 
     def cross_platform
@@ -34,10 +38,6 @@ module Rake
 
     def binary(platform = nil)
       if platform == "java"
-	warn_once <<-EOF
-Compiling a native C extension on JRuby. This is discouraged and a 
-Java extension should be preferred.
-        EOF
         "#{name}.#{RbConfig::MAKEFILE_CONFIG['DLEXT']}"
       else
         super
@@ -55,6 +55,10 @@ Rerun `rake` under MRI Ruby 1.8.x/1.9.x to cross/native compile.
       end
 
       super
+
+      unless compiled_files.empty?
+        warn "WARNING: rake-compiler found compiled files in '#{@ext_dir}' directory. Please remove them."
+      end
 
       # only gems with 'ruby' platforms are allowed to define native tasks
       define_native_tasks if !@no_native && (@gem_spec && @gem_spec.platform == 'ruby')
@@ -92,12 +96,18 @@ Rerun `rake` under MRI Ruby 1.8.x/1.9.x to cross/native compile.
       # copy binary from temporary location to final lib
       # tmp/extension_name/extension_name.{so,bundle} => lib/
       task "copy:#{@name}:#{platf}:#{ruby_ver}" => [lib_path, "#{tmp_path}/#{binary(platf)}"] do
-        cp "#{tmp_path}/#{binary(platf)}", "#{lib_path}/#{binary(platf)}"
+        install "#{tmp_path}/#{binary(platf)}", "#{lib_path}/#{binary(platf)}"
       end
 
       # binary in temporary folder depends on makefile and source files
       # tmp/extension_name/extension_name.{so,bundle}
       file "#{tmp_path}/#{binary(platf)}" => ["#{tmp_path}/Makefile"] + source_files do
+        jruby_compile_msg = <<-EOF
+Compiling a native C extension on JRuby. This is discouraged and a 
+Java extension should be preferred.
+        EOF
+        warn_once(jruby_compile_msg) if defined?(JRUBY_VERSION)
+
         chdir tmp_path do
           sh make
         end
@@ -109,7 +119,8 @@ Rerun `rake` under MRI Ruby 1.8.x/1.9.x to cross/native compile.
         options = @config_options.dup
 
         # include current directory
-        cmd = [Gem.ruby, '-I.']
+        include_dirs = ['.'].concat(@config_includes).uniq.join(File::PATH_SEPARATOR)
+        cmd = [Gem.ruby, "-I#{include_dirs}"]
 
         # if fake.rb is present, add to the command line
         if t.prerequisites.include?("#{tmp_path}/fake.rb") then
@@ -131,10 +142,14 @@ Rerun `rake` under MRI Ruby 1.8.x/1.9.x to cross/native compile.
         # add options to command
         cmd.push(*options)
 
+        # add any extra command line options
+        unless extra_options.empty?
+          cmd.push(*extra_options)
+        end
+
         chdir tmp_path do
           # FIXME: Rake is broken for multiple arguments system() calls.
           # Add current directory to the search path of Ruby
-          # Also, include additional parameters supplied.
           sh cmd.join(' ')
         end
       end
@@ -178,9 +193,10 @@ Rerun `rake` under MRI Ruby 1.8.x/1.9.x to cross/native compile.
       # create 'native:gem_name' and chain it to 'native' task
       unless Rake::Task.task_defined?("native:#{@gem_spec.name}:#{platf}")
         task "native:#{@gem_spec.name}:#{platf}" do |t|
-          # FIXME: truly duplicate the Gem::Specification
-          # workaround the lack of #dup for Gem::Specification
+          # FIXME: workaround Gem::Specification limitation around cache_file:
+          # http://github.com/rubygems/rubygems/issues/78
           spec = gem_spec.dup
+          spec.instance_variable_set(:"@cache_file", nil) if spec.respond_to?(:cache_file)
 
           # adjust to specified platform
           spec.platform = Gem::Platform.new(platf)
@@ -205,7 +221,7 @@ Rerun `rake` under MRI Ruby 1.8.x/1.9.x to cross/native compile.
           end
 
           # Generate a package for this gem
-          gem_package = Rake::GemPackageTask.new(spec) do |pkg|
+          Gem::PackageTask.new(spec) do |pkg|
             pkg.need_zip = false
             pkg.need_tar = false
           end
@@ -262,7 +278,7 @@ Rerun `rake` under MRI Ruby 1.8.x/1.9.x to cross/native compile.
 
       # warn the user about the need of configuration to use cross compilation.
       unless File.exist?(config_path)
-        warn "rake-compiler must be configured first to enable cross-compilation"
+        define_dummy_cross_platform_tasks
         return
       end
 
@@ -303,7 +319,7 @@ Rerun `rake` under MRI Ruby 1.8.x/1.9.x to cross/native compile.
       # genearte fake.rb for different ruby versions
       file "#{tmp_path}/fake.rb" do |t|
         File.open(t.name, 'w') do |f|
-          f.write fake_rb(ruby_ver)
+          f.write fake_rb(for_platform, ruby_ver)
         end
       end
 
@@ -339,6 +355,15 @@ Rerun `rake` under MRI Ruby 1.8.x/1.9.x to cross/native compile.
       end
     end
 
+    def define_dummy_cross_platform_tasks
+      task 'cross' do
+        Rake::Task['compile'].clear
+        task 'compile' do
+          raise "rake-compiler must be configured first to enable cross-compilation"
+        end
+      end
+    end
+
     def extconf
       "#{@ext_dir}/#{@config_script}"
     end
@@ -354,6 +379,11 @@ Rerun `rake` under MRI Ruby 1.8.x/1.9.x to cross/native compile.
             }
           end
       end
+
+      unless @make
+        raise "Couldn't find a suitable `make` tool. Use `MAKE` env to set an alternative."
+      end
+
       @make
     end
 
@@ -361,8 +391,8 @@ Rerun `rake` under MRI Ruby 1.8.x/1.9.x to cross/native compile.
       windows? ? 'NUL' : '/dev/null'
     end
 
-    def source_files
-     @source_files ||= FileList["#{@ext_dir}/#{@source_pattern}"]
+    def compiled_files
+      FileList["#{@ext_dir}/#{@compiled_pattern}"]
     end
 
     def compiles_cross_platform
@@ -373,13 +403,13 @@ Rerun `rake` under MRI Ruby 1.8.x/1.9.x to cross/native compile.
       [*@cross_platform].map { |p| "native:#{p}" }
     end
 
-    def fake_rb(version)
+    def fake_rb(platform, version)
       <<-FAKE_RB
         class Object
           remove_const :RUBY_PLATFORM
           remove_const :RUBY_VERSION
           remove_const :RUBY_DESCRIPTION if defined?(RUBY_DESCRIPTION)
-          RUBY_PLATFORM = "i386-mingw32"
+          RUBY_PLATFORM = "#{platform}"
           RUBY_VERSION = "#{version}"
           RUBY_DESCRIPTION = "ruby \#{RUBY_VERSION} (\#{RUBY_RELEASE_DATE}) [\#{RUBY_PLATFORM}]"
         end
