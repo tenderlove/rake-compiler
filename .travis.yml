@@ -1,0 +1,14 @@
+language: ruby
+before_script:
+  - gem update --system $RUBYGEMS_VERSION
+rvm:
+  - 1.8.7
+  - 1.9.3
+  - 2.0.0
+env:
+  - RUBYGEMS_VERSION=1.8.25
+  - RUBYGEMS_VERSION=2.0.3
+matrix:
+  exclude:
+    - rvm: 2.0.0
+      env: RUBYGEMS_VERSION=1.8.25

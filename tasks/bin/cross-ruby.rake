@@ -42,7 +42,7 @@ require 'rake/extensioncompiler'
 
 MAKE = ENV['MAKE'] || %w[gmake make].find { |c| system("#{c} -v > /dev/null 2>&1") }
 USER_HOME = File.expand_path("~/.rake-compiler")
-RUBY_CC_VERSION = "ruby-" << ENV.fetch("VERSION", "1.8.7-p334")
+RUBY_CC_VERSION = "ruby-" << ENV.fetch("VERSION", "1.8.7-p371")
 RUBY_SOURCE = ENV['SOURCE']
 RUBY_BUILD = RbConfig::CONFIG["host"]
 
@@ -53,18 +53,23 @@ MAJOR = RUBY_CC_VERSION.match(/.*-(\d.\d).\d/)[1]
 MINGW_HOST = ENV['HOST'] || Rake::ExtensionCompiler.mingw_host
 MINGW_TARGET = MINGW_HOST.gsub('msvc', '')
 
+# Unset any possible variable that might affect compilation
+["CC", "CXX", "CPPFLAGS", "LDFLAGS", "RUBYOPT"].each do |var|
+  ENV.delete(var)
+end
+
 # define a location where sources will be stored
 directory "#{USER_HOME}/sources/#{RUBY_CC_VERSION}"
-directory "#{USER_HOME}/builds/#{RUBY_CC_VERSION}"
+directory "#{USER_HOME}/builds/#{MINGW_HOST}/#{RUBY_CC_VERSION}"
 
 # clean intermediate files and folders
 CLEAN.include("#{USER_HOME}/sources/#{RUBY_CC_VERSION}")
-CLEAN.include("#{USER_HOME}/builds/#{RUBY_CC_VERSION}")
+CLEAN.include("#{USER_HOME}/builds/#{MINGW_HOST}/#{RUBY_CC_VERSION}")
 
 # remove the final products and sources
 CLOBBER.include("#{USER_HOME}/sources")
 CLOBBER.include("#{USER_HOME}/builds")
-CLOBBER.include("#{USER_HOME}/ruby/#{RUBY_CC_VERSION}")
+CLOBBER.include("#{USER_HOME}/ruby/#{MINGW_HOST}/#{RUBY_CC_VERSION}")
 CLOBBER.include("#{USER_HOME}/config.yml")
 
 # ruby source file should be stored there
@@ -121,7 +126,7 @@ task :mingw32 do
 end
 
 # generate the makefile in a clean build location
-file "#{USER_HOME}/builds/#{RUBY_CC_VERSION}/Makefile" => ["#{USER_HOME}/builds/#{RUBY_CC_VERSION}",
+file "#{USER_HOME}/builds/#{MINGW_HOST}/#{RUBY_CC_VERSION}/Makefile" => ["#{USER_HOME}/builds/#{MINGW_HOST}/#{RUBY_CC_VERSION}",
                                   "#{USER_HOME}/sources/#{RUBY_CC_VERSION}/Makefile.in"] do |t|
 
   options = [
@@ -138,26 +143,26 @@ file "#{USER_HOME}/builds/#{RUBY_CC_VERSION}/Makefile" => ["#{USER_HOME}/builds/
   options << "--with-winsock2" if MAJOR == "1.8"
 
   chdir File.dirname(t.name) do
-    prefix = File.expand_path("../../ruby/#{RUBY_CC_VERSION}")
+    prefix = File.expand_path("../../../ruby/#{MINGW_HOST}/#{RUBY_CC_VERSION}")
     options << "--prefix=#{prefix}"
-    sh File.expand_path("../../sources/#{RUBY_CC_VERSION}/configure"), *options
+    sh File.expand_path("../../../sources/#{RUBY_CC_VERSION}/configure"), *options
   end
 end
 
 # make
-file "#{USER_HOME}/builds/#{RUBY_CC_VERSION}/ruby.exe" => ["#{USER_HOME}/builds/#{RUBY_CC_VERSION}/Makefile"] do |t|
+file "#{USER_HOME}/builds/#{MINGW_HOST}/#{RUBY_CC_VERSION}/ruby.exe" => ["#{USER_HOME}/builds/#{MINGW_HOST}/#{RUBY_CC_VERSION}/Makefile"] do |t|
   chdir File.dirname(t.prerequisites.first) do
     sh MAKE
   end
 end
 
 # make install
-file "#{USER_HOME}/ruby/#{RUBY_CC_VERSION}/bin/ruby.exe" => ["#{USER_HOME}/builds/#{RUBY_CC_VERSION}/ruby.exe"] do |t|
+file "#{USER_HOME}/ruby/#{MINGW_HOST}/#{RUBY_CC_VERSION}/bin/ruby.exe" => ["#{USER_HOME}/builds/#{MINGW_HOST}/#{RUBY_CC_VERSION}/ruby.exe"] do |t|
   chdir File.dirname(t.prerequisites.first) do
     sh "#{MAKE} install"
   end
 end
-task :install => ["#{USER_HOME}/ruby/#{RUBY_CC_VERSION}/bin/ruby.exe"]
+task :install => ["#{USER_HOME}/ruby/#{MINGW_HOST}/#{RUBY_CC_VERSION}/bin/ruby.exe"]
 
 desc "Update rake-compiler list of installed Ruby versions"
 task 'update-config' do
@@ -170,12 +175,19 @@ task 'update-config' do
     config = {}
   end
 
-  files = Dir.glob("#{USER_HOME}/ruby/*/**/rbconfig.rb").sort
+  files = Dir.glob("#{USER_HOME}/ruby/*/*/**/rbconfig.rb").sort
 
   files.each do |rbconfig|
-    version = rbconfig.match(/.*-(\d.\d.\d)/)[1]
-    config["rbconfig-#{version}"] = rbconfig
-    puts "Found Ruby version #{version} (#{rbconfig})"
+    version, platform = rbconfig.match(/.*-(\d.\d.\d).*\/([-\w]+)\/rbconfig/)[1,2]
+    config["rbconfig-#{platform}-#{version}"] = rbconfig
+
+    # fake alternate (binary compatible) i386-mswin32-60 platform
+    if platform == "i386-mingw32"
+      alt_platform = "i386-mswin32-60"
+      config["rbconfig-#{alt_platform}-#{version}"] = rbconfig
+    end
+
+    puts "Found Ruby version #{version} for platform #{platform} (#{rbconfig})"
   end
 
   when_writing("Saving changes into #{config_file}") {
