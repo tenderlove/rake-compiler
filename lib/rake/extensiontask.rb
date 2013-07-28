@@ -61,7 +61,9 @@ Rerun `rake` under MRI Ruby 1.8.x/1.9.x to cross/native compile.
       end
 
       # only gems with 'ruby' platforms are allowed to define native tasks
-      define_native_tasks if !@no_native && (@gem_spec && @gem_spec.platform == 'ruby')
+      if !@no_native && (@gem_spec && @gem_spec.platform == 'ruby')
+        define_native_tasks(nil, RUBY_VERSION, @cross_compiling)
+      end
 
       # only define cross platform functionality when enabled
       return unless @cross_compile
